@@ -92,12 +92,13 @@ if uploaded_file:
 
         if results:
             st.success(f"🎉 Done! Extracted {len(results)} strips.")
-            for r in results:
+            for idx, r in enumerate(results):
                 st.download_button(
                     label=f"📥 Download {r['filename']}",
                     data=base64.b64decode(r["filedata"]),
                     file_name=r["filename"],
-                    mime="application/pdf"
+                    mime="application/pdf",
+                    key=f"download_{idx}"
                 )
         else:
             st.error("⚠️ No strips found.")
