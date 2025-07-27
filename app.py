@@ -1,104 +1,127 @@
 import streamlit as st
 import fitz  # PyMuPDF
-from PIL import Image
-import os
+from PIL import Image, ImageEnhance, ImageOps
+import pytesseract
 import io
 import base64
 import re
+import zipfile
+import os
 from tempfile import TemporaryDirectory
 
+# Optional: Set path for tesseract if on Windows
+# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
 st.set_page_config(page_title="PDF Strip Extractor", layout="centered")
-st.title("📄 Dossier PDF Strip Extractor")
-st.write("Upload your Dossier PDF. It will extract each strip (based on LO/LA headers) into a separate PDF file.")
 
-uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
+st.title("📄 PDF Strip Extractor with Dossier Number Detection")
+st.markdown("Upload a PDF, and this app will extract each strip with dossier numbers using OCR (Tesseract).")
 
-def extract_strips_from_pdf_bytes(pdf_bytes, output_dir):
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+# Function to preprocess image for better OCR
+def preprocess_image(image):
+    image = ImageOps.grayscale(image)
+    enhancer = ImageEnhance.Contrast(image)
+    return enhancer.enhance(2.5)
 
+# Function to extract dossier headers
+def extract_dossier_headers(image, page_num, image_height):
+    image = preprocess_image(image)
+    data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT, config='--psm 6')
+    headers = []
+    seen_y = set()
+
+    for i, word in enumerate(data['text']):
+        word = word.strip().upper()
+        if word in ['LO', 'LA', 'L0'] and i + 1 < len(data['text']):
+            next_word = data['text'][i + 1].strip()
+            y = data['top'][i]
+
+            if any(abs(y - sy) < 10 for sy in seen_y):
+                continue
+            seen_y.add(y)
+
+            if re.fullmatch(r'\d+', next_word):
+                headers.append((y, next_word))
+            else:
+                headers.append((y, f"Unknown_{page_num}_{i}"))
+
+    return sorted(headers, key=lambda x: x[0])
+
+# Function to extract strips from PDF
+def extract_strips_from_pdf(pdf_bytes):
     result = []
-    try:
+    MIN_HEIGHT = 50  # pixels
+
+    with TemporaryDirectory() as output_dir:
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    except Exception as e:
-        st.error(f"❌ Failed to open PDF: {str(e)}")
-        return []
 
-    THRESHOLD = 15  # Minimum y-distance between headers to treat them as separate strips
+        for page_num, page in enumerate(doc):
+            pix = page.get_pixmap(dpi=300)
+            image = Image.open(io.BytesIO(pix.tobytes()))
+            headers = extract_dossier_headers(image, page_num, image.height)
 
-    for page_num, page in enumerate(doc):
-        blocks = page.get_text("dict")["blocks"]
-        starts = []
-
-        # Detect lines containing LO/LA headers
-        for b in blocks:
-            for l in b.get("lines", []):
-                line_text = " ".join([s["text"] for s in l["spans"]]).strip()
-                if re.search(r'\bL[O0A]\b', line_text.upper()):
-                    y = l["bbox"][1]
-                    match = re.search(r'\bL[O0A]\b\s+(\S+)', line_text.upper())
-                    dossier = match.group(1) if match else "Unknown"
-                    starts.append({"y_start": y, "dossier": dossier})
-
-        starts.sort(key=lambda x: x["y_start"])
-        filtered_starts = []
-        for s in starts:
-            if not filtered_starts or abs(s["y_start"] - filtered_starts[-1]["y_start"]) > THRESHOLD:
-                filtered_starts.append(s)
-
-        if not filtered_starts:
-            st.warning(f"⚠️ No headers found on page {page_num + 1}")
-            continue
-
-        cut_points = [s["y_start"] for s in filtered_starts]
-        cut_points.append(page.rect.height)
-
-        for i in range(len(filtered_starts)):
-            y0 = cut_points[i]
-            y1 = cut_points[i+1]
-
-            if y1 <= y0:
+            if not headers:
+                st.warning(f"No headers found on page {page_num + 1}")
                 continue
 
-            rect = fitz.Rect(0, y0, page.rect.width, y1)
-            pix = page.get_pixmap(clip=rect, dpi=300)
-            img = Image.open(io.BytesIO(pix.tobytes()))
+            cut_points = headers.copy()
+            last_y = cut_points[-1][0]
+            if (image.height - last_y) > (MIN_HEIGHT + 20) and "Unknown" not in cut_points[-1][1]:
+                cut_points.append((image.height, "END"))
 
-            row = str(i + 1)
-            dossier = filtered_starts[i]["dossier"]
-            filename = f"{dossier}-{row}.pdf"
-            output_path = os.path.join(output_dir, filename)
+            for i in range(len(cut_points) - 1):
+                y0 = cut_points[i][0]
+                y1 = cut_points[i + 1][0]
+                dossier = cut_points[i][1]
 
-            img.save(output_path, "PDF", resolution=300.0)
+                height = y1 - y0
+                if height < MIN_HEIGHT or y1 <= y0:
+                    continue
 
-            with open(output_path, "rb") as f:
-                encoded = base64.b64encode(f.read()).decode('utf-8')
+                rect = (0, y0, image.width, y1)
+                cropped = image.crop(rect)
 
-            result.append({
-                "filename": filename,
-                "filedata": encoded
-            })
+                if "Unknown" in dossier :
+                    continue  # Skip last unknown if all others are valid
 
-            st.success(f"✅ Extracted: {filename}")
+                filename = f"{dossier}_{i+1}.pdf"
+                output_path = os.path.join(output_dir, filename)
+                cropped.save(output_path, "PDF", resolution=300.0)
 
-    doc.close()
+                with open(output_path, "rb") as f:
+                    file_bytes = f.read()
+                    result.append((filename, file_bytes))
+
+                st.success(f"✅ Extracted: {filename}")
+
+        doc.close()
     return result
+
+# Streamlit UI
+uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
 
 if uploaded_file:
     pdf_bytes = uploaded_file.read()
-    with TemporaryDirectory() as tmpdir:
-        with st.spinner("🔍 Extracting strips..."):
-            results = extract_strips_from_pdf_bytes(pdf_bytes, tmpdir)
+    with st.spinner("Extracting strips..."):
+        strips = extract_strips_from_pdf(pdf_bytes)
 
-        if results:
-            st.success(f"🎉 Done! Extracted {len(results)} strips.")
-            for idx, r in enumerate(results):
-                st.download_button(
-                    label=f"📥 Download {r['filename']}",
-                    data=base64.b64decode(r["filedata"]),
-                    file_name=r["filename"],
-                    mime="application/pdf",
-                    key=f"download_{idx}"
-                )
-        else:
-            st.error("⚠️ No strips found.")
+    if strips:
+        st.markdown("---")
+        st.subheader("🧾 Extracted Strips")
+        for filename, filedata in strips:
+            st.download_button(
+                label=f"📥 Download {filename}",
+                data=filedata,
+                file_name=filename,
+                mime="application/pdf"
+            )
+
+        # Option to download all as ZIP
+        with io.BytesIO() as zip_buffer:
+            with zipfile.ZipFile(zip_buffer, "w") as zip_file:
+                for filename, filedata in strips:
+                    zip_file.writestr(filename, filedata)
+            zip_buffer.seek(0)
+            st.download_button("📦 Download All as ZIP", data=zip_buffer, file_name="all_strips.zip", mime="application/zip")
+    else:
+        st.error("No strips extracted.")
