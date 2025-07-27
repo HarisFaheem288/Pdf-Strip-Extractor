@@ -1,58 +1,103 @@
-## 📄 PDF Strip Extractor
+# 📄 PDF Strip Extractor with Dossier Number Detection
 
-A FastAPI-powered service that extracts individual strip sections from a multi-strip scanned PDF document. Each strip typically starts with a "LO" or "LA" header and contains dossier information.
+This project is a FastAPI-based web service that extracts **individual strips** (sections) from a base64-encoded PDF. Each strip is identified using OCR with **Tesseract** and saved as a separate PDF file with its associated **dossier number**.
 
----
-
-### 🚀 Features
-
-* 📑 Accepts PDF input in base64 format via a FastAPI endpoint
-* ✂️ Automatically detects and splits strips based on header patterns (`LO`, `LA`, or `L0`)
-* 🖼 Converts each strip into a separate **PDF file**
-* ⚙️ Clean output — each strip is saved separately
-* 💻 Can be integrated into larger document processing pipelines
+> ✅ 100% accurate for PDFs where each strip contains a clear dossier header.
+> ❌ Strips with unreadable headers are automatically ignored to prevent incorrect or partial extraction.
 
 ---
 
-### 🧠 How It Works
+## 🚀 Features
 
-1. The PDF is decoded from base64 and read using **PyMuPDF (`fitz`)**.
-2. Each page is scanned for text patterns like `LO`, `LA`, or `L0` using **regex matching**.
-3. The vertical (Y-axis) positions of these headers are used to determine cutting points.
-4. Each section between headers is **clipped**, converted to image using **`get_pixmap()`**, and then saved as an individual PDF.
-5. Output is base64-encoded again and returned as JSON.
-
----
-
-### 📦 Tech Stack
-
-* **Python**
-* **FastAPI** – API framework
-* **PyMuPDF (fitz)** – PDF reading & processing
-* **Pillow (PIL)** – Image handling
-* **Base64** – Encoding/decoding input/output
+* 🔍 **OCR-based strip detection** using Tesseract
+* ✂️ Splits a multi-strip PDF into separate strip-PDFs
+* 🧠 Detects headers like `LO 123456`, `LA 7890`, `L0 1111`
+* 🗂️ Automatically names files as `DossierNumber_X.pdf`
+* ❌ Skips unknown/partial or low-confidence headers
+* ⚡ Powered by **FastAPI**
 
 ---
 
-### 📥 API Usage
+## 🧪 Example
 
-#### `POST /extract`
+### Input:
 
-**Request Body:**
+* PDF with multiple dossier sections labeled like `LO 123456`, `LA 654321`, etc.
+
+### Output:
+
+* A list of base64-encoded PDF files:
+
+  * `123456_1.pdf`
+  * `654321_2.pdf`
+  * ...
+
+Each containing one strip.
+
+---
+
+## 📦 Installation
+
+1. **Clone the repository**
+
+   ```bash
+   git clone https://github.com/yourusername/pdf-strip-extractor.git
+   cd pdf-strip-extractor
+   ```
+
+2. **Install dependencies**
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Install Tesseract OCR**
+
+   * **Windows**: [Download here](https://github.com/tesseract-ocr/tesseract)
+   * **Linux**:
+
+     ```bash
+     sudo apt update
+     sudo apt install tesseract-ocr
+     ```
+
+4. *(Optional)* If on Windows, set the Tesseract path:
+
+   ```python
+   pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+   ```
+
+---
+
+## 🔥 Run the App
+
+```bash
+uvicorn main:app --reload
+```
+
+It will start the API on: `http://localhost:8000`
+
+---
+
+## 📬 API Usage
+
+**Endpoint**: `POST /extract`
+
+**Request JSON:**
 
 ```json
 {
-  "pdf_base64": "your_base64_encoded_pdf_here"
+  "pdf_base64": "BASE64_ENCODED_PDF"
 }
 ```
 
-**Response:**
+**Response JSON:**
 
 ```json
 [
   {
-    "filename": "12345-1.pdf",
-    "filedata": "base64_pdf_content"
+    "filename": "123456_1.pdf",
+    "filedata": "base64_encoded_file_data"
   },
   ...
 ]
@@ -60,27 +105,34 @@ A FastAPI-powered service that extracts individual strip sections from a multi-s
 
 ---
 
-### 📁 Output Structure
+## 🧠 How It Works
 
-Each extracted strip is saved and returned with:
-
-* **Filename**: `<dossier-number>-<row-number>.pdf`
-* **Filedata**: Base64-encoded PDF content
-
----
-
-### 🧪 Example Use Cases
-
-* Dossier-based scanning & record-keeping
-* Bulk document digitization
-* Automated input for OCR/ML pipelines
+* Uses `PyMuPDF` to convert each page to an image
+* Applies image preprocessing (grayscale + contrast enhancement)
+* Uses `pytesseract` to detect headers like `LO <number>`
+* Crops strips between header positions
+* Saves each strip as a separate PDF file
+* Returns the PDF strips in base64 format
 
 ---
 
-### 🛠 Installation & Run
+## 📂 Example Dossier Header Pattern
 
-```bash
-pip install -r requirements.txt
-uvicorn main:app --reload
+Recognized headers must look like:
+
+```
+LO 123456
+LA 7890
+L0 112233
 ```
 
+---
+
+## 🛠️ Dependencies
+
+```
+fastapi
+uvicorn
+pytesseract
+PyMuPDF
+Pillow
